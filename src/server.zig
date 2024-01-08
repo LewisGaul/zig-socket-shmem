@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const c = @cImport({
+    @cDefine("_GNU_SOURCE", {});
     @cInclude("errno.h"); // errno, E* constants, e.g. EBADFD
     @cInclude("fcntl.h"); // O_* constants, e.g. O_CREAT
     @cInclude("semaphore.h"); // sem_*(), sem_t
@@ -100,10 +101,52 @@ fn createSocket() !void {
     // indefinitely.
     //fd_set_flags(socket_fd, O_NONBLOCK);
 
-    if (c.bind(socket_fd, @ptrCast(&sockaddr), @sizeOf(@TypeOf(sockaddr))) != 0) {
+    if (c.bind(
+        socket_fd,
+        @as([*c]const c.struct_sockaddr_un, @ptrCast(&sockaddr)),
+        @sizeOf(@TypeOf(sockaddr)),
+    ) != 0) {
         shared.err("bind({s}) failed: {s}", .{ sockaddr.sun_path, strerrno() });
         return error.socket_bind;
     }
+}
+
+fn socketWaitForClient() !c_int {
+    var fd: c_int = -1;
+
+    if (c.listen(socket_fd, 1) != 0) {
+        shared.err("listen() failed: {s}", .{strerrno()});
+        return error.socket_listen;
+    }
+
+    shared.debug("Listening on socket, waiting for client to connect...", .{});
+
+    fd = c.accept(socket_fd, null, null);
+    if (fd == -1) {
+        shared.err("accept() failed: {s}", .{strerrno()});
+        return error.socket_accept;
+    }
+
+    shared.debug("Client connected, fd={d}", .{fd});
+
+    return (fd);
+}
+
+fn getClientInfo(fd: c_int) !void {
+    var ucred: c.struct_ucred = undefined;
+    const len: c.socklen_t = @sizeOf(@TypeOf(ucred));
+
+    if (c.getsockopt(fd, c.SOL_SOCKET, c.SO_PEERCRED, &ucred, &len) < 0) {
+        shared.err("getsockopt() failed: {s}", .{strerrno()});
+        return error.getsockopt;
+    }
+
+    shared.debug(
+        "Client PID={d}, UID={d}, GID={d}",
+        ucred.pid,
+        ucred.uid,
+        ucred.gid,
+    );
 }
 
 pub fn main() !void {
@@ -112,4 +155,8 @@ pub fn main() !void {
     try createShmem();
 
     try createSocket();
+
+    client_fd = try socketWaitForClient();
+
+    try getClientInfo(client_fd);
 }
