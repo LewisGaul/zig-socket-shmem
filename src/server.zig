@@ -6,6 +6,7 @@ const c = @cImport({
     @cInclude("semaphore.h"); // sem_*(), sem_t
     @cInclude("sys/mman.h"); // Memory MANagement - shm_*(), mmap(), ...
     @cInclude("sys/socket.h"); // struct sockaddr, bind(), accept(), listen()
+    @cInclude("sys/un.h"); // struct sockaddr_un
     @cInclude("unistd.h"); // ftruncate()
 });
 
@@ -74,11 +75,15 @@ fn createShmem() !void {
 }
 
 fn createSocket() !void {
-    var sockaddr = c.struct_sockaddr{
-        .sa_family = c.AF_LOCAL,
-        .sa_data = std.mem.zeroes(@typeOf(sockaddr.sa_data)),
+    const sockaddr: c.struct_sockaddr_un = addr: {
+        var tmp_sockaddr = c.struct_sockaddr_un{
+            .sun_family = c.AF_LOCAL,
+            .sun_path = undefined,
+        };
+        @memset(&tmp_sockaddr.sun_path, 0);
+        @memcpy(tmp_sockaddr.sun_path[0..SOCKET_PATH.len], SOCKET_PATH);
+        break :addr tmp_sockaddr;
     };
-    @memcpy(&sockaddr.sa_data, SOCKET_PATH);
 
     // Create the socket.
     shared.debug("Creating socket", .{});
@@ -95,11 +100,8 @@ fn createSocket() !void {
     // indefinitely.
     //fd_set_flags(socket_fd, O_NONBLOCK);
 
-    if (c.bind(socket_fd, &sockaddr, @sizeOf(sockaddr)) != 0) {
-        shared.err(
-            "bind({s}) failed: {s}",
-            .{ sockaddr.sun_path, strerrno() },
-        );
+    if (c.bind(socket_fd, @ptrCast(&sockaddr), @sizeOf(@TypeOf(sockaddr))) != 0) {
+        shared.err("bind({s}) failed: {s}", .{ sockaddr.sun_path, strerrno() });
         return error.socket_bind;
     }
 }
