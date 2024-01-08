@@ -1,10 +1,16 @@
 const std = @import("std");
 
-const c = @cImport({
-    @cInclude("semaphore.h"); // sem_t
+pub const c = @cImport({
+    @cDefine("_GNU_SOURCE", {});
+    @cInclude("fcntl.h"); // fcntl(), O_* constants, e.g. O_CREAT
+    @cInclude("semaphore.h"); // sem_*(), sem_t
     @cInclude("stdio.h"); // getchar()
     @cInclude("string.h"); // strerror()
+    @cInclude("sys/mman.h"); // Memory MANagement - shm_*(), mmap(), ...
+    @cInclude("sys/socket.h"); // struct sockaddr, socket(), bind(), accept(), listen()
     @cInclude("sys/types.h"); // size_t
+    @cInclude("sys/un.h"); // struct sockaddr_un
+    @cInclude("unistd.h"); // close(), ftruncate(), ...
 });
 
 // Maximum size for exchanged string.
@@ -23,11 +29,11 @@ pub const ShmemStruct = struct {
 };
 
 pub fn pause() void {
-    std.debug.print("Press enter to continue...\n");
+    std.debug.print("Press enter to continue...\n", .{});
     // Requires very recent version of Zig, see
     // https://github.com/ziglang/zig/commit/8ce33795.
     // std.os.linux.pause();
-    c.getchar();
+    _ = c.getchar();
 }
 
 pub fn debug(comptime fmt: []const u8, args: anytype) void {
@@ -50,4 +56,14 @@ pub fn panic(comptime fmt: []const u8, args: anytype) void {
 
 pub fn strerrno() [*c]const u8{
     return c.strerror(std.c._errno().*);
+}
+
+pub fn getSockaddr() c.struct_sockaddr_un {
+    var sockaddr = c.struct_sockaddr_un{
+        .sun_family = c.AF_LOCAL,
+        .sun_path = undefined,
+    };
+    @memset(&sockaddr.sun_path, 0);
+    @memcpy(sockaddr.sun_path[0..SOCKET_PATH.len], SOCKET_PATH);
+    return sockaddr;
 }
