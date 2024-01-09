@@ -8,13 +8,21 @@ const O_RDWR = shared.c.O_RDWR;
 const PF_LOCAL = shared.c.PF_LOCAL;
 const PROT_READ = shared.c.PROT_READ;
 const PROT_WRITE = shared.c.PROT_WRITE;
+const SCM_RIGHTS = shared.c.SCM_RIGHTS;
 const SO_PEERCRED = shared.c.SO_PEERCRED;
 const SOCK_STREAM = shared.c.SOCK_STREAM;
 const SOL_SOCKET = shared.c.SOL_SOCKET;
 const fd_t = std.c.fd_t;
 const socklen_t = std.c.socklen_t;
+const struct_cmsghdr = shared.c.struct_cmsghdr;
+const struct_msghdr = shared.c.struct_msghdr;
+const struct_iovec = shared.c.struct_iovec;
 const struct_sockaddr_un = shared.c.struct_sockaddr_un;
 const struct_ucred = shared.c.struct_ucred;
+const CMSG_DATA = shared.c.CMSG_DATA;
+const CMSG_FIRSTHDR = shared.c.CMSG_FIRSTHDR;
+const CMSG_LEN = shared.c.CMSG_LEN;
+const CMSG_SPACE = shared.c.CMSG_SPACE;
 
 const SHMEM_PATH = shared.SHMEM_PATH;
 const SOCKET_PATH = shared.SOCKET_PATH;
@@ -141,6 +149,38 @@ fn getClientInfo(fd: fd_t) !void {
     );
 }
 
+/// Based on the example at https://man7.org/linux/man-pages/man3/cmsg.3.html
+fn sendShmemFd() !void {
+    var data: c_int = 42;
+    var msg: struct_msghdr = undefined;
+    var iov: struct_iovec = undefined;
+    var cmsg: struct_cmsghdr = undefined;
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    iov.iov_base = &data;
+    iov.iov_len = @sizeOf(@TypeOf(data));
+    msg.msg_control = &cmsg;
+    msg.msg_controllen = @sizeOf(@TypeOf(cmsg));
+    cmsg.cmsg_level = SOL_SOCKET;
+    cmsg.cmsg_type = SCM_RIGHTS;
+    cmsg.cmsg_len = CMSG_LEN(@sizeOf(@TypeOf(shmem_fd)));
+    // Not sure why CMSG_DATA() fails to find the __cmsg_data() method...
+    // @memcpy(CMSG_DATA(&cmsg), &shmem_fd);
+    // @memcpy(@as([*]u8, @ptrCast(cmsg.__cmsg_data())), &[_]fd_t{shmem_fd});
+    std.mem.copyForwards(
+        fd_t,
+        @as(&[1]fd_t, @alignCast(@ptrCast(cmsg.__cmsg_data()))),
+        &[_]fd_t{shmem_fd},
+    );
+
+    // Send fd plus ancillary data.
+    if (std.c.sendmsg(client_fd, &msg, 0) < 0) {
+        shared.err("sendmsg() failed: {s}", .{strerrno()});
+        return error.sendmsg;
+    }
+}
+
 pub fn main() !void {
     std.debug.print("Server starting...\n", .{});
 
@@ -151,6 +191,8 @@ pub fn main() !void {
     client_fd = try socketWaitForClient();
 
     getClientInfo(client_fd) catch {};
+
+    try sendShmemFd();
 
     shared.pause();
 }
